@@ -3,6 +3,7 @@ import { analyzeText } from "../services/gemini.service.js";
 import Meeting from "../models/Project.js";
 import { transcribeSpeech } from "../services/gemini.service.js";
 import { createGoogleDoc } from "../services/google.service.js";
+import Client from "../models/Client.js";
 
 export const getMeeting = async (req: Request, res: Response) => {
     const userId = res.locals.userId
@@ -20,7 +21,16 @@ export const getOneMeeting = async (req: Request, res: Response) => {
 
 export const deleteMeeting = async (req: Request, res: Response) => {
     const {id} = req.params;
-    const deleted = await Meeting.findByIdAndDelete(id)
+    const userId = res.locals.userId
+
+    // Scoped to the owner, so one user cannot delete another's meeting by id.
+    const deleted = await Meeting.findOneAndDelete({_id: id, userId})
+
+    if (!deleted) return res.status(404).json({
+        success: false,
+        message: "Meeting not found"
+    })
+
     return res.status(200).json({
         success: true,
         message: "Deleted"
@@ -55,17 +65,32 @@ const processRecording = async (meetingId: string) => {
 
         const analysizedText = await analyzeText(text, prevMeetingNotes)
 
-        const documentId = await createGoogleDoc(
-            meeting.accessToken!, 'Mom-ai-notes', JSON.stringify(analysizedText, null, 2)
-        )
-
+        // Saved before the Doc step on purpose: the transcription and analysis
+        // are the expensive part, and a Docs failure must not discard them.
         await Meeting.findByIdAndUpdate(meetingId, {
             transcript: text,
             analysis: analysizedText,
-            googleDocId: documentId,
             status: "done",
             error: null
         })
+
+        try {
+            const client = await Client.findById(meeting.clientId)
+            const docTitle = `Meeting notes - ${client?.email ?? "client"} - ${
+                new Date().toLocaleDateString("en-GB")
+            }`
+
+            const documentId = await createGoogleDoc(meeting.accessToken!, docTitle, analysizedText)
+            await Meeting.findByIdAndUpdate(meetingId, {googleDocId: documentId})
+        } catch (docError) {
+            // The notes are already saved and visible; only the export failed.
+            console.error("Google Doc export failed:", docError)
+            await Meeting.findByIdAndUpdate(meetingId, {
+                error: `Notes saved, but the Google Doc export failed: ${
+                    docError instanceof Error ? docError.message : "unknown error"
+                }`
+            }).catch(() => {})
+        }
     } catch (error) {
         console.error("processRecording failed:", error)
         await Meeting.findByIdAndUpdate(meetingId, {

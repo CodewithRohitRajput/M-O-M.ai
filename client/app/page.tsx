@@ -5,10 +5,31 @@ import { useEffect, useState } from 'react'
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000'
 
+type ActionItem = {
+  task?: string
+  owner?: string | null
+  deadline?: string | null
+}
+
 type Meeting = {
   _id: string
   clientId?: { _id: string; email?: string } | string | null
-  analysis?: { summary?: string | null } | null
+  analysis?: {
+    summary?: string | null
+    actionItems?: ActionItem[] | null
+    risks?: string[] | null
+    decisions?: string[] | null
+    problems?: string[] | null
+  } | null
+  status?: string
+  createdAt?: string
+}
+
+const STATUS_TEXT: Record<string, string> = {
+  queued: 'Waiting for the bot',
+  recording: 'Bot is recording',
+  transcribing: 'Writing notes',
+  failed: 'Failed',
 }
 
 export default function Home() {
@@ -32,6 +53,23 @@ export default function Home() {
       )
       .filter(Boolean)
   ).size
+
+  /* Every action item across every meeting, so the dashboard shows what is
+     actually outstanding rather than just how many calls happened. */
+  const allTasks = meetings.flatMap((meeting) =>
+    (meeting.analysis?.actionItems ?? [])
+      .filter((item) => item?.task)
+      .map((item) => ({
+        ...item,
+        meetingId: meeting._id,
+        client:
+          typeof meeting.clientId === 'object' ? meeting.clientId?.email : undefined,
+      }))
+  )
+
+  const withDeadline = allTasks
+    .filter((task) => task.deadline)
+    .sort((a, b) => String(a.deadline).localeCompare(String(b.deadline)))
 
   return (
     <section className="space-y-10">
@@ -57,12 +95,48 @@ export default function Home() {
           </Link>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <Stat label="Meetings" value={loading ? null : meetings.length} delay={0} />
           <Stat label="With notes" value={loading ? null : analysed} delay={70} />
-          <Stat label="Clients" value={loading ? null : clients} delay={140} />
+          <Stat label="Action items" value={loading ? null : allTasks.length} delay={140} />
+          <Stat label="Clients" value={loading ? null : clients} delay={210} />
         </div>
       </header>
+
+      {!loading && withDeadline.length > 0 && (
+        <section className="reveal space-y-3" style={{ '--d': '120ms' } as React.CSSProperties}>
+          <h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-faint">
+            <span className="text-accent">
+              <ClockIcon />
+            </span>
+            Upcoming deadlines
+            <span className="rounded-full border border-[rgb(var(--border-strong))] px-2 py-0.5 text-[10px] tabular-nums">
+              {withDeadline.length}
+            </span>
+          </h2>
+
+          <div className="surface divide-y divide-[rgb(var(--border))] overflow-hidden rounded-2xl">
+            {withDeadline.slice(0, 6).map((task, index) => (
+              <Link
+                key={`${task.meetingId}-${index}`}
+                href={`/meetings/${task.meetingId}`}
+                className="flex items-start gap-3 px-5 py-4 transition-colors duration-300 hover:bg-[rgb(var(--accent-glow)/0.06)]"
+              >
+                <span className="mt-0.5 shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-500">
+                  {task.deadline}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm">{task.task}</p>
+                  <p className="mt-0.5 truncate text-xs text-faint">
+                    {task.owner ?? 'Unassigned'}
+                    {task.client ? ` · ${task.client}` : ''}
+                  </p>
+                </div>
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
 
       {error && (
         <div className="reveal flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/[0.07] p-4 text-sm text-red-500">
@@ -111,10 +185,14 @@ export default function Home() {
                       <p className="truncate text-sm font-semibold text-accent">
                         {client?.email ?? 'Client email unavailable'}
                       </p>
-                      {summary ? (
+                      {meeting.status === 'failed' ? (
+                        <Badge tone="failed">Failed</Badge>
+                      ) : summary ? (
                         <Badge tone="ready">Notes ready</Badge>
                       ) : (
-                        <Badge tone="pending">Processing</Badge>
+                        <Badge tone="pending">
+                          {STATUS_TEXT[meeting.status ?? ''] ?? 'Processing'}
+                        </Badge>
                       )}
                     </div>
 
@@ -122,7 +200,18 @@ export default function Home() {
                       {summary ?? 'Meeting notes are still processing.'}
                     </p>
 
-                    {!summary && <div className="rail mt-3 max-w-xs" />}
+                    {summary && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-faint">
+                        <Meta count={meeting.analysis?.actionItems?.length}>tasks</Meta>
+                        <Meta count={meeting.analysis?.decisions?.length}>decisions</Meta>
+                        <Meta count={meeting.analysis?.problems?.length}>pain points</Meta>
+                        <Meta count={meeting.analysis?.risks?.length}>risks</Meta>
+                      </div>
+                    )}
+
+                    {!summary && meeting.status !== 'failed' && (
+                      <div className="rail mt-3 max-w-xs" />
+                    )}
                   </div>
 
                   <span className="mt-3 shrink-0 text-faint transition-all duration-500 group-hover:translate-x-1 group-hover:text-accent">
@@ -182,11 +271,29 @@ function Stat({
   )
 }
 
-function Badge({ tone, children }: { tone: 'ready' | 'pending'; children: string }) {
+/** One "3 tasks" pill; renders nothing when the count is zero or missing. */
+function Meta({ count, children }: { count?: number | null; children: string }) {
+  if (!count) return null
+  return (
+    <span className="tabular-nums">
+      <span className="font-semibold text-muted">{count}</span> {children}
+    </span>
+  )
+}
+
+function Badge({
+  tone,
+  children,
+}: {
+  tone: 'ready' | 'pending' | 'failed'
+  children: string
+}) {
   const styles =
     tone === 'ready'
       ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-500'
-      : 'border-amber-500/30 bg-amber-500/10 text-amber-500'
+      : tone === 'failed'
+        ? 'border-red-500/30 bg-red-500/10 text-red-500'
+        : 'border-amber-500/30 bg-amber-500/10 text-amber-500'
 
   return (
     <span
@@ -206,6 +313,21 @@ function initials(email?: string) {
   const letters =
     parts.length > 1 ? parts[0][0] + parts[1][0] : local.slice(0, 2)
   return letters.toUpperCase()
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-4" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M12 7.5V12l3 2"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
 }
 
 function PlusIcon() {

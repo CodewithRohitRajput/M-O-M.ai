@@ -8,7 +8,7 @@ const router = express.Router()
 
 router.get('/get', authenticateToken,getMeeting)
 router.get('/get/:id', authenticateToken,getOneMeeting)
-router.delete('/get/:id', authenticateToken,deleteMeeting)
+router.delete('/delete/:id', authenticateToken,deleteMeeting)
 router.post('/transcribe',authenticateToken, upload.single("audio"),transcribeMeeting )
 router.post('/schedule', authenticateToken, scheduleMeeting)
 

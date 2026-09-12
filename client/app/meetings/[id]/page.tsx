@@ -6,14 +6,28 @@ import { useParams, useRouter } from "next/navigation";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+type ActionItem = {
+  task?: string;
+  owner?: string | null;
+  deadline?: string | null;
+};
+
+type Analysis = {
+  summary?: string | null;
+  actionItems?: ActionItem[] | null;
+  [key: string]: unknown;
+};
+
 type Meeting = {
   _id: string;
   clientId?: { _id: string; email?: string } | string | null;
   transcript?: string;
-  analysis?: { summary?: string; requirements?: string[] } | null;
+  analysis?: Analysis | null;
   status?: string;
   error?: string | null;
   meetLink?: string | null;
+  googleDocId?: string | null;
+  createdAt?: string;
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -21,6 +35,26 @@ const STATUS_LABEL: Record<string, string> = {
   recording: "Bot is in the meeting, recording",
   transcribing: "Transcribing and writing notes",
 };
+
+/* Same order as the Google Doc, so the page and the exported notes read alike. */
+const LIST_SECTIONS: { key: string; title: string }[] = [
+  { key: "problems", title: "Client Pain Points" },
+  { key: "clientWants", title: "What the Client Wants" },
+  { key: "clientNeeds", title: "What the Client Needs" },
+  { key: "requirements", title: "Requirements" },
+  { key: "preferences", title: "Preferences" },
+  { key: "decisions", title: "Decisions" },
+  { key: "clientPromises", title: "Client Commitments" },
+  { key: "ourPromises", title: "Our Commitments" },
+  { key: "decisionMakers", title: "Decision Makers" },
+  { key: "changesFromPreviousMeetings", title: "Changes Since Last Meeting" },
+  { key: "risks", title: "Risks" },
+];
+
+function listOf(analysis: Analysis | null | undefined, key: string): string[] {
+  const value = analysis?.[key];
+  return Array.isArray(value) ? (value as string[]).filter(Boolean) : [];
+}
 
 export default function MeetingPage() {
   const { id } = useParams<{ id: string }>();
@@ -104,7 +138,9 @@ function MeetingView({ id }: { id: string }) {
     );
 
   const client = typeof meeting.clientId === "object" ? meeting.clientId : null;
-  const requirements = meeting.analysis?.requirements ?? [];
+  const actionItems = (meeting.analysis?.actionItems ?? []).filter(
+    (item) => item?.task,
+  );
 
   return (
     <article className="space-y-10">
@@ -135,16 +171,42 @@ function MeetingView({ id }: { id: string }) {
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center gap-3">
+          {meeting.googleDocId && (
+            <a
+              href={`https://docs.google.com/document/d/${meeting.googleDocId}/edit`}
+              target="_blank"
+              rel="noreferrer"
+              className="btn btn-ghost"
+            >
+              <DocIcon />
+              Open in Google Docs
+            </a>
+          )}
+
           <button
             className="btn btn-danger"
             disabled={deleting}
             onClick={() => {
               setDeleting(true);
-              fetch(`${API}/meet/get/${id}`, { method: "DELETE" })
-                .then(() => router.push("/"))
-                .catch(() => {
+              fetch(`${API}/meet/delete/${id}`, {
+                method: "DELETE",
+                credentials: "include",
+              })
+                .then(async (response) => {
+                  // fetch only rejects on network errors, so a 401/404 has to
+                  // be checked explicitly or the redirect fires on failure.
+                  if (!response.ok) {
+                    const body = await response.json().catch(() => null);
+                    throw new Error(body?.message ?? `Delete failed (${response.status})`);
+                  }
+                  router.push("/");
+                })
+                .catch((err: unknown) => {
                   setDeleting(false);
-                  setError("Could not delete this meeting.");
+                  setError(
+                    err instanceof Error ? err.message : "Could not delete this meeting.",
+                  );
                 });
             }}
           >
@@ -155,6 +217,7 @@ function MeetingView({ id }: { id: string }) {
             )}
             {deleting ? "Deleting..." : "Delete"}
           </button>
+          </div>
         </div>
       </header>
 
@@ -180,29 +243,67 @@ function MeetingView({ id }: { id: string }) {
         </div>
       </Section>
 
-      {requirements.length > 0 && (
+      {actionItems.length > 0 && (
         <Section
-          title="Requirements"
-          delay={170}
-          icon={<ListIcon />}
-          count={requirements.length}
+          title="Action Items"
+          delay={150}
+          icon={<CheckSquareIcon />}
+          count={actionItems.length}
         >
           <div className="surface divide-y divide-[rgb(var(--border))] overflow-hidden rounded-2xl">
-            {requirements.map((item: string, index: number) => (
+            {actionItems.map((item, index) => (
               <div
-                key={item}
-                style={{ "--d": `${200 + Math.min(index, 12) * 55}ms` } as React.CSSProperties}
+                key={`${item.task}-${index}`}
+                style={{ "--d": `${180 + Math.min(index, 12) * 55}ms` } as React.CSSProperties}
                 className="reveal-x flex items-start gap-3 px-6 py-4 transition-colors duration-300 hover:bg-[rgb(var(--accent-glow)/0.06)]"
               >
                 <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border border-[rgb(var(--accent-glow)/0.3)] bg-[rgb(var(--accent-glow)/0.1)] text-[10px] font-bold text-accent">
                   {index + 1}
                 </span>
-                <p className="text-sm leading-6 text-muted">{item}</p>
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <p className="text-sm leading-6">{item.task}</p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Chip icon={<PersonIcon />}>{item.owner ?? "Unassigned"}</Chip>
+                    <Chip icon={<ClockIcon />} tone={item.deadline ? "due" : undefined}>
+                      {item.deadline ?? "No deadline"}
+                    </Chip>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
         </Section>
       )}
+
+      {LIST_SECTIONS.map((section, sectionIndex) => {
+        const items = listOf(meeting.analysis, section.key);
+        if (items.length === 0) return null;
+
+        return (
+          <Section
+            key={section.key}
+            title={section.title}
+            delay={190 + sectionIndex * 20}
+            icon={<ListIcon />}
+            count={items.length}
+          >
+            <div className="surface divide-y divide-[rgb(var(--border))] overflow-hidden rounded-2xl">
+              {items.map((item, index) => (
+                <div
+                  key={`${item}-${index}`}
+                  style={{ "--d": `${200 + Math.min(index, 12) * 55}ms` } as React.CSSProperties}
+                  className="reveal-x flex items-start gap-3 px-6 py-4 transition-colors duration-300 hover:bg-[rgb(var(--accent-glow)/0.06)]"
+                >
+                  <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border border-[rgb(var(--accent-glow)/0.3)] bg-[rgb(var(--accent-glow)/0.1)] text-[10px] font-bold text-accent">
+                    {index + 1}
+                  </span>
+                  <p className="text-sm leading-6 text-muted">{item}</p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        );
+      })}
 
       {meeting.transcript && (
         <details
@@ -261,6 +362,62 @@ function Section({
       </h2>
       {children}
     </section>
+  );
+}
+
+function Chip({
+  icon,
+  tone,
+  children,
+}: {
+  icon: React.ReactNode;
+  tone?: "due";
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+        tone === "due"
+          ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+          : "border-[rgb(var(--border-strong))] text-faint"
+      }`}
+    >
+      {icon}
+      {children}
+    </span>
+  );
+}
+
+function CheckSquareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-4" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="m8 12 2.8 2.8L16 9.5"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PersonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-3" aria-hidden="true">
+      <circle cx="12" cy="8" r="3.4" stroke="currentColor" strokeWidth="2" />
+      <path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ClockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className="size-3" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="2" />
+      <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
