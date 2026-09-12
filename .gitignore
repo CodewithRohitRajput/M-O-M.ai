@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Secrets - never commit these
+.env
+.env.*
+!.env.example
+.pypirc
+
+# Python virtualenvs
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Uploaded + recorded meeting audio (client data, and large)
+server/uploads/
+Google-Meet-Bot/recordings/
+*.wav
+
+# Build output
+client/.next/
+client/out/
+*.tsbuildinfo
+
+# OS
+.DS_Store
+Thumbs.db
