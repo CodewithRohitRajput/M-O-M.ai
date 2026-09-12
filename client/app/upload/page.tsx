@@ -22,6 +22,9 @@ export default function UploadPage() {
   const [submitting, setSubmitting] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [step, setStep] = useState(0);
+  const [mode, setMode] = useState<"bot" | "upload">("bot");
+  const [meetLink, setMeetLink] = useState("");
+  const [duration, setDuration] = useState(60);
 
   useEffect(() => {
     fetch(`${API}/client/get`, {
@@ -70,8 +73,16 @@ export default function UploadPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!clientId || !audio) {
-      setMessage("Select a client and choose an audio file.");
+    if (!clientId) {
+      setMessage("Select a client first.");
+      return;
+    }
+    if (mode === "bot" && !meetLink) {
+      setMessage("Paste the Google Meet link.");
+      return;
+    }
+    if (mode === "upload" && !audio) {
+      setMessage("Choose an audio file.");
       return;
     }
 
@@ -80,15 +91,28 @@ export default function UploadPage() {
     setMessage("");
 
     try {
-      const form = new FormData();
-      form.append("audio", audio);
-      form.append("clientId", clientId);
+      let response: Response;
 
-      const response = await fetch(`${API}/meet/transcribe`, {
-        method: "POST",
-        body: form,
-        credentials: "include",
-      });
+      if (mode === "bot") {
+        /* Queues the job. The bot runner picks it up, records, and posts the
+           audio back into the same pipeline - the meeting page polls for it. */
+        response = await fetch(`${API}/meet/schedule`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ clientId, meetLink, duration }),
+        });
+      } else {
+        const form = new FormData();
+        form.append("audio", audio!);
+        form.append("clientId", clientId);
+
+        response = await fetch(`${API}/meet/transcribe`, {
+          method: "POST",
+          body: form,
+          credentials: "include",
+        });
+      }
 
       const body = await response.json();
 
@@ -131,6 +155,31 @@ export default function UploadPage() {
         style={{ "--d": "90ms" } as React.CSSProperties}
         className="surface edge-glow reveal space-y-7 rounded-2xl p-6 sm:p-8"
       >
+        <div className="grid grid-cols-2 gap-1 rounded-xl border border-[rgb(var(--border-strong))] p-1">
+          {(
+            [
+              ["bot", "Bot joins the meeting"],
+              ["upload", "Upload a recording"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => {
+                setMode(value);
+                setMessage("");
+              }}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold transition-colors duration-200 ${
+                mode === value
+                  ? "bg-[rgb(var(--accent-glow)/0.14)] text-accent"
+                  : "text-muted hover:text-[rgb(var(--foreground))]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="space-y-3">
           <label
             htmlFor="client"
@@ -170,6 +219,7 @@ export default function UploadPage() {
           )}
         </div>
 
+        {mode === "upload" ? (
         <div className="space-y-3">
           <span className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-faint">
             <StepDot>2</StepDot>
@@ -232,6 +282,48 @@ export default function UploadPage() {
             />
           </label>
         </div>
+        ) : (
+        <div className="space-y-3">
+          <label
+            htmlFor="meetLink"
+            className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-faint"
+          >
+            <StepDot>2</StepDot>
+            Google Meet link
+          </label>
+          <input
+            id="meetLink"
+            type="url"
+            value={meetLink}
+            onChange={(event) => setMeetLink(event.target.value)}
+            placeholder="https://meet.google.com/xxx-xxxx-xxx"
+            className="field"
+          />
+
+          <label
+            htmlFor="duration"
+            className="flex items-center gap-2 pt-2 text-xs font-semibold uppercase tracking-wider text-faint"
+          >
+            <StepDot>3</StepDot>
+            Record for (minutes)
+          </label>
+          <input
+            id="duration"
+            type="number"
+            min={1}
+            max={180}
+            value={duration / 60}
+            onChange={(event) =>
+              setDuration(Math.max(1, Number(event.target.value)) * 60)
+            }
+            className="field"
+          />
+          <p className="text-xs text-muted">
+            The bot joins as soon as the runner picks this up, so start it when
+            the meeting is about to begin.
+          </p>
+        </div>
+        )}
 
         {message && (
           <p className="reveal-x flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-4 py-3 text-sm text-red-500">
@@ -264,7 +356,11 @@ export default function UploadPage() {
             className="btn btn-primary"
           >
             {submitting ? <span className="spinner" /> : <SparkIcon />}
-            {submitting ? "Processing..." : "Create notes"}
+            {submitting
+              ? "Working..."
+              : mode === "bot"
+                ? "Send the bot"
+                : "Create notes"}
           </button>
           <Link href="/" className="btn btn-ghost">
             Cancel

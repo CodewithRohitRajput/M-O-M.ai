@@ -11,6 +11,15 @@ type Meeting = {
   clientId?: { _id: string; email?: string } | string | null;
   transcript?: string;
   analysis?: { summary?: string; requirements?: string[] } | null;
+  status?: string;
+  error?: string | null;
+  meetLink?: string | null;
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  queued: "Waiting for the bot to pick this up",
+  recording: "Bot is in the meeting, recording",
+  transcribing: "Transcribing and writing notes",
 };
 
 export default function MeetingPage() {
@@ -24,11 +33,33 @@ function MeetingView({ id }: { id: string }) {
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState(false);
 
+  /* A bot meeting sits queued while the call happens, so keep re-fetching
+     until the pipeline reaches a terminal state. */
   useEffect(() => {
-    fetch(`${API}/meet/get/${id}`, { credentials: "include" })
-      .then((response) => response.json())
-      .then((body) => setMeeting(body.data))
-      .catch(() => setError("Could not load this meeting."));
+    let active = true;
+
+    const load = async () => {
+      try {
+        const response = await fetch(`${API}/meet/get/${id}`, {
+          credentials: "include",
+        });
+        const body = await response.json();
+        if (!active) return;
+
+        setMeeting(body.data);
+
+        if (body.data && !["done", "failed"].includes(body.data.status)) {
+          setTimeout(load, 5000);
+        }
+      } catch {
+        if (active) setError("Could not load this meeting.");
+      }
+    };
+
+    load();
+    return () => {
+      active = false;
+    };
   }, [id]);
 
   if (error)
@@ -126,6 +157,22 @@ function MeetingView({ id }: { id: string }) {
           </button>
         </div>
       </header>
+
+      {STATUS_LABEL[meeting.status ?? ""] && (
+        <div className="reveal flex items-center gap-3 rounded-xl border border-[rgb(var(--accent-glow)/0.25)] bg-[rgb(var(--accent-glow)/0.06)] px-4 py-3 text-sm">
+          <span className="spinner" />
+          <span className="font-semibold text-accent">
+            {STATUS_LABEL[meeting.status!]}...
+          </span>
+        </div>
+      )}
+
+      {meeting.status === "failed" && (
+        <div className="reveal flex items-center gap-2 rounded-xl border border-red-500/30 bg-red-500/[0.07] px-4 py-3 text-sm text-red-500">
+          <AlertIcon />
+          {meeting.error ?? "Processing failed."}
+        </div>
+      )}
 
       <Section title="Summary" delay={90} icon={<SparkIcon />}>
         <div className="surface edge-glow rounded-2xl p-6 text-[15px] leading-7 text-muted">

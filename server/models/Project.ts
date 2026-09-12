@@ -11,7 +11,7 @@ const meetingSchema = new mongoose.Schema({
     },
     transcript: {
         type: String,
-        required: true
+        default: null
     },
 
     analysis: {
@@ -98,7 +98,27 @@ const meetingSchema = new mongoose.Schema({
     googleDocId: {
         type: String,
         default : null
-    }
-});
+    },
+
+    // Bot jobs: the row is created when you schedule, long before there is audio.
+    source: {
+        type: String,
+        enum: ["upload", "bot"],
+        default: "upload"
+    },
+    status: {
+        type: String,
+        enum: ["queued", "recording", "transcribing", "done", "failed"],
+        default: "done"
+    },
+    meetLink: { type: String, default: null },
+    duration: { type: Number, default: null },
+    audioPath: { type: String, default: null },
+    error: { type: String, default: null },
+
+    // The bot posts back without a cookie, so it cannot supply a Google token.
+    // Stash the one from the browser session that scheduled the job.
+    accessToken: { type: String, default: null }
+}, {timestamps: true});
 
 export default mongoose.model("Meeting", meetingSchema);

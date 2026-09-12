@@ -76,7 +76,8 @@ export const transcribeSpeech = async (filePath: string) => {
                     {
                         type: "file",
                         data: audio,
-                        mediaType: "audio/mpeg"
+                        // The bot records .wav; browser uploads are usually mp3/m4a.
+                        mediaType: filePath.toLowerCase().endsWith(".wav") ? "audio/wav" : "audio/mpeg"
                     }]
 
                 }
